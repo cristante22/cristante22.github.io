@@ -30,20 +30,131 @@
     <div class="wrapper">
 
       <section>
-        <section>
         <div id="title">
           <h1>miniJava Compiler</h1>
           <p><a href="http://www.cambridge.org/us/features/052182060X/">miniJava</a> is a subset of Java simplified for instruction in compiler design. &nbsp;It is simple enough for a student to write a fully functional compiler over the course of a semester, but retains most of Java's procedural syntax and its basic object-oriented functionality. &nbsp;My implementation went beyond the basic miniJava specification, implementing all of Java's scoping rules, 'for' loops, and access modifiers for fields and methods.</p>
           <p>Undertaking this project imbued me with a strong appreciation for the design and implementation of programming languages, especially of the object-oriented paradigm. &nbsp;In turn, I have noticed that understanding how languages are parsed and how static, stack, and heap memory are allocated has help me learn about new languages much more readily, as I can draw comparisons to my knowledge of Java's implementation and know which questions to ask to fill gaps in my knowledge.</p>
-          <p>The compiler also presented a major software engineering challenge. &nbsp;By employing the appropriate design patterns, I kept this complex project under my control. &nbsp;I implemented a state machine for parsing the tokens in the language, a recursive descent parser for the rules in the grammar, and utilized Visitor to traverse syntax trees for identification, type checking, and code generation. &nbsp;This is also the first project where I recognized the need for source control, which allowed me to experiment freely to find elegant solutions to my problems.</p>
+          <p>The compiler also presented a major software engineering challenge, consisting of over 80 different classes. &nbsp;By employing the appropriate design patterns, I kept this complex project under my control. &nbsp;I implemented a state machine for parsing the tokens in the language, a recursive descent parser for the rules in the grammar, and utilized Visitor to traverse syntax trees for identification, type checking, and code generation. &nbsp;This is also the first project where I recognized the need for source control, which allowed me to experiment freely to find elegant solutions to my problems.</p>
           <p>The miniJava compiler was written in full Java.</p>
           <hr>
           </span>
         </div>
         <div>
           <!-- Description -->
+          <pre>
+            <code>
+              package mjava;
+
+              import java.io.BufferedReader;
+              import java.io.FileNotFoundException;
+              import java.io.FileReader;
+              import java.io.IOException;
+
+              import mjam.ObjectFile;
+              import mjava.ast.AST;
+
+              /** Main compiler driver, composed of a front end and back end */
+              public class Compiler implements UserInterface {
+                
+                String filename; // for error reporting
+                FrontEnd front;
+                BackEnd back;
+                
+                // Make a new compiler object for every file
+                public Compiler(String filename) throws FileNotFoundException {
+                  this.filename = filename;
+                  front = new FrontEndImpl(filename);
+                  back = new BackEndImpl(filename);
+                }
+
+                public boolean compile() {
+                  try {
+                    AST decoratedAST = front.analyzeProgram();
+                    ObjectFile targetCode = back.generateCode(decoratedAST);
+                    return !targetCode.write();
+                  }
+                  catch (CompilationException ce) {
+                    System.out.println(ce.getMessage());
+                    showError(ce);
+                    return false;
+                  }
+                }
+                
+                // Uses source position to graphically display the error
+                void showError(CompilationException ce) {
+                  int lineNumber = ce.getLineNumber();
+                  int charNumber = ce.getColumnNumber();
+                  try {
+                    // Show the line containing the error
+                    java.util.Scanner scanner = new java.util.Scanner(new BufferedReader(new FileReader(filename)));
+                    for (int i = 1; i < lineNumber; i++)
+                      scanner.nextLine();
+                    String lineOfError = scanner.nextLine();
+                    System.out.println(lineOfError);
+
+                    placeCarrot(lineOfError, charNumber);
+
+                    scanner.close();
+                  }
+                  catch (FileNotFoundException fe) {
+                    System.out.println("Error reading file");
+                  }
+                }
+
+                // Show the token that caused the error
+                void placeCarrot(String line, int charNumber) {
+                  StringBuffer sb = new StringBuffer("");
+                  for (int i = 1; i < charNumber; i++) {
+                    if (line.charAt(i-1) == '\t')
+                      sb.append('\t');
+                    else 
+                      sb.append(' ');
+                  }
+                  sb.append('^');
+                  System.out.println(sb);
+                }
+                
+                // Source file path given as args[0]
+                // Main method handles all the IO stuff and calls 'compile()'
+                public static void main(String[] args) {
+                  String filename = ""; // initialize for catch block below
+                  int exitCode = 4; // guilty until proven innocent
+                  
+                  try { 
+                    filename = args[0];
+                    int len = filename.length(); // will use this repeatedly
+
+                    // Check to make sure file ending is .java or .mjava
+                    String jPrefix = filename.substring(len - 5, len);
+                    String mPrefix = filename.substring(len - 6, len);
+
+                    if ( !(jPrefix.equals(".java") || mPrefix.equals(".mjava")))
+                      throw new IOException("Error: input file must be .java or .mjava");
+
+                    // Make a new Compiler object for the program
+                    Compiler compiler = new Compiler(filename);
+                    boolean programAccepted = compiler.compile();
+                    if (programAccepted)
+                      exitCode = 0;
+                  }
+                  catch (ArrayIndexOutOfBoundsException ae) {
+                    System.out.println("Error: no file given");
+                  }
+                  catch (FileNotFoundException fe) {
+                    System.out.println("Error: File at\n" + filename + "\nnot found.");
+                  }
+                  catch (IOException ie) {
+                    System.out.println(ie.getMessage());
+                  }
+                  
+                  System.out.println("exit code " + exitCode);
+                  System.exit(exitCode);
+                }
+              }
+
+            </code>
+          </pre>
         </div>
-        <hr>
         <hr>
           <span class="credits right">Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></span>
       </section>
