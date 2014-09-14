@@ -615,6 +615,7 @@ strong {
 
 section img {
   max-width: 100%;
+  margin: auto;
 }
 
 blockquote {
@@ -776,7 +777,7 @@ dt {
 
 
 
-  
+
 }
 #header nav li.downloads {
   float: right;
@@ -807,12 +808,12 @@ section #title h1 {
   text-align: center;
   line-height: 36px;
 }
-section #title p {
+section #description p {
   color: #d7cfbe;
   font-family: 'OpenSansLight', "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-weight: normal;
   font-size: 18px;
-  text-align: center;
+  text-align: left;
 }
 section #title .credits {
   font-size: 11px;
