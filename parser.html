@@ -80,7 +80,7 @@ public class RecursiveDescentParser implements Parser {
   /* Parsing Methods
    * 
    * One subroutine for each rule in the EBNF grammar
-   * For now, they all return void.
+   * Each method returns an AST node, building the tree bottom-up.
    * 
    * Each maintains the invariant that the token it is to analyze is stored in
    * 'currentToken' when the method is called.
