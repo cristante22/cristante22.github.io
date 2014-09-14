@@ -1,0 +1,844 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Brian's Portfolio</title>
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/prism.css"
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="javascripts/prism.js"></script>
+    <script src="javascripts/respond.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <!--[if lt IE 8]>
+    <link rel="stylesheet" href="stylesheets/ie.css">
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+  </head>
+  <body>
+      <div id="header">
+        <nav><ul>
+          <li><a href="/index.html">Home</a></li>
+          <li><a href="/medcosts.html">MedCosts</a></li>
+          <li><a href="/compiler.html">miniJava Compiler</a></li>
+          <li><a href="/mips.html">MIPS CPU</a></li>
+        </ul></nav>
+      </div><!-- end header -->
+
+    <div class="wrapper">
+
+      <section>
+        <div id="title">
+          <h1>miniJava Compiler</h1>
+          <p><a href="http://www.cambridge.org/us/features/052182060X/">miniJava</a> is a subset of Java simplified for instruction in compiler design. &nbsp;It is simple enough for a student to write a fully functional compiler over the course of a semester, but retains most of Java's procedural syntax and its basic object-oriented functionality. &nbsp;My implementation went beyond the basic miniJava specification, implementing all of Java's scoping rules, 'for' loops, and access modifiers for fields and methods.</p>
+          <p>The miniJava compiler was written in full Java.</p>
+          <hr>
+        </div>
+        <div>
+          <!-- Description -->
+          <h5>Samples:</h5>
+          <ol>
+            <li><a href="/compiler.html">Top Module</a></li>
+            <li>Syntactic Analysis</li>
+            <li><a href="/visitor.html">Contextual Analysis</a></li>
+          </ol>
+          <pre>
+            <code class="language-java">
+package mjava.syntax;
+
+import static mjava.syntax.Token.*;
+import mjava.ast.*;
+import mjava.ast.Package;
+
+/** 
+ * A top-down, recursive descent parser for miniJava.
+ * Follows the LL(1) grammar defined in the comments for each method
+ * 
+ * Input: Token Stream
+ * Output: AST
+ */
+public class RecursiveDescentParser implements Parser {
+  Scanner scanner; 
+  Token currentToken;
+  SourcePosition posn;
+
+  /* Constructors */
+  public RecursiveDescentParser(Scanner scanner) {
+    this.scanner = scanner;
+  }
+
+  public AST scanAndParse() throws ParsingException {
+    // Get first token
+    currentToken = scanner.nextToken();
+    posn = currentToken.getSourcePosition();
+    return parseProgram(); // ClassDeclList -> AST?
+  }
+
+  /* Parsing Methods
+   * 
+   * One subroutine for each rule in the EBNF grammar
+   * For now, they all return void.
+   * 
+   * Each maintains the invariant that the token it is to analyze is stored in
+   * 'currentToken' when the method is called.
+   */
+  
+  // Program ::= ClassDeclaration* eot
+  Package parseProgram() throws ParsingException {
+    SourcePosition progPosn = posn;
+    ClassDeclList classes = new ClassDeclList();
+    while (currentToken == CLASS)
+      classes.add(parseClassDeclaration());
+    accept(Token.EOT);    
+    return new Package(classes, progPosn);
+  }
+
+  // ClassDeclaration ::= class id { FieldOrMethodDeclaration* }
+  ClassDecl parseClassDeclaration() throws ParsingException {
+    SourcePosition classPosn = posn;
+    FieldDeclList fields = new FieldDeclList();
+    MethodDeclList methods = new MethodDeclList();
+    
+    accept(CLASS);
+    String name = currentToken.spelling;
+    accept(ID);
+    accept(BRACE_OPEN);
+    // There will be other }'s, but the way the parser works,
+    // every time we get back to this check we expect to be looking at the
+    // matching } for the class declaration
+    while (currentToken != BRACE_CLOSE) {
+      MemberDecl member = parseMemberDeclaration();
+      // Decide whether we have parsed a method or a field
+      if (member instanceof FieldDecl)
+        fields.add((FieldDecl)member);
+      else
+        methods.add((MethodDecl)member);
+    }
+    accept();
+    return new ClassDecl(name, fields, methods, classPosn);
+  }
+
+  // MemberDeclaration ::= FieldDeclaration | MethodDeclaration
+  MemberDecl parseMemberDeclaration() throws ParsingException {
+    
+    // (public | private | e) (static | e) Type id
+    boolean isPrivate = false, isStatic = false;
+    Type type;
+    String name;
+    switch (currentToken) {
+    case PUBLIC:
+      accept();
+      break;
+    case PRIVATE:
+      accept();
+      isPrivate = true;
+      break;
+    default: break; // do nothing
+    }
+    
+    if (currentToken == STATIC) {
+      accept();
+      isStatic = true;
+    }
+    type = parseType(); // may throw exception
+    name = currentToken.spelling;
+    accept(ID);
+
+    /* Decide whether field, method, or error and return */
+    // Need this either way
+    FieldDecl member = new FieldDecl(isPrivate, isStatic, type, name, posn);
+    
+    // Field Declaration
+    if (currentToken == SEMICOLON) {
+      accept();
+      return member;
+    }
+
+    // Method Declaration
+    else if (currentToken == PARENTHESIS_OPEN) {
+      accept(PARENTHESIS_OPEN);
+      ParameterDeclList parameters;
+      if (currentToken != PARENTHESIS_CLOSE)
+        parameters = parseParameterList();
+      else
+        parameters = new ParameterDeclList(); // empty list
+      accept(PARENTHESIS_CLOSE);  // need this
+
+      // Method body
+      accept(BRACE_OPEN);
+      StatementList body = new StatementList();
+      Expression returnExpression = null; // not always needed
+      
+      while (currentToken != BRACE_CLOSE) {
+        if (currentToken == RETURN) {
+          returnExpression = parseReturnStatement();
+          break; // last statement in method body
+        }
+        else 
+          body.add(parseStatement());
+      }
+      accept();
+      return new MethodDecl(member, parameters, body, returnExpression, posn);
+    }
+    else throw new SyntaxException(currentToken, posn);
+  }
+
+  // ReturnStatement ::= return  Expression ;
+  Expression parseReturnStatement() throws ParsingException {
+    accept(RETURN);
+    Expression e = parseExpression();
+    accept(SEMICOLON);
+    return e;
+  }
+
+  // ParameterList ::= Type id (, Type id )* 
+  ParameterDeclList parseParameterList() throws ParsingException {
+    ParameterDeclList parameters = new ParameterDeclList();
+    Type type = parseType();
+    String spelling = currentToken.spelling;
+    accept(ID);
+    parameters.add(new ParameterDecl(type, spelling, posn));
+    while (currentToken == COMMA) {
+      accept();
+      type = parseType();
+      spelling = currentToken.spelling;
+      accept(ID);
+      parameters.add(new ParameterDecl(type, spelling, posn));
+    }
+    // Don't accept ')' yet --
+    // leave it for parseFieldOrMethodDeclaration(), which called this method
+    return parameters;
+  }
+
+  // ArgumentList ::= Expression ( , Expression)* 
+  ExprList parseArgumentList() throws ParsingException {
+    ExprList args = new ExprList();
+    args.add(parseExpression());
+    while (currentToken == COMMA) {
+      accept();
+      args.add(parseExpression());
+    }
+    // Don't accept ')' yet --
+    // leave it for parseMethodCallTail(), which called this method
+    return args;
+  }
+  
+  // Type  ::=  (int | id ) (e | []) |  boolean  | void
+  Type parseType() throws ParsingException {
+    Type type;
+    switch (currentToken) {
+    case INT: // could be array
+      accept();
+      type = new BaseType(TypeKind.INT, posn);
+      if (currentToken == BRACKET_OPEN) {
+        accept();
+        accept(BRACKET_CLOSE);
+        type = new ArrayType(type, posn);
+      }
+      break;
+    case ID: // could be array
+      Identifier id = new Identifier(currentToken.spelling, posn);
+      accept();
+      type = new ClassType(id, posn);
+      if (currentToken == BRACKET_OPEN) {
+        accept();
+        accept(BRACKET_CLOSE);
+        type = new ArrayType(type, posn);
+      }
+      break;
+    case BOOLEAN: // cannot be array
+      accept();
+      type = new BaseType(TypeKind.BOOLEAN, posn);
+      break;
+    case VOID: // cannot be array
+      accept();
+      type = new BaseType(TypeKind.VOID, posn);
+      break;
+    default:
+      throw new SyntaxException(currentToken, posn);
+    }
+    return type;
+  }
+
+  // Reference  ::= (this |  id  (e | [ Expression ]) ) (DotNotation)* 
+  Reference parseReference() throws ParsingException {
+    Reference ref;
+    switch (currentToken) {
+    case THIS:
+      accept();
+      ref = new ThisRef(posn);
+      break;
+    case ID:
+      Identifier id = new Identifier(currentToken.spelling, posn);
+      accept();
+      ref = new IdRef(id, posn);
+      if (currentToken == BRACKET_OPEN) {
+        accept();
+        Expression e = parseExpression();
+        accept(BRACKET_CLOSE);
+        ref = new IndexedRef(ref, e, posn);
+      }
+      break;
+    default:
+      throw new SyntaxException(currentToken, posn);
+    }
+    
+    while (currentToken == PERIOD) 
+      ref = parseDotNotation(ref); // may return QualifiedRef or Indexed Ref
+    
+    return ref;
+  }
+  
+  
+  /* Statement ::= { Statement* }   
+  |  id (id AssignmentTail  |  DotNotation* (AssignmentTail | MethodCallTail) 
+  |  id [ ( ] id AssignmentTail  |  Expression ] DotNotation* (AssignmentTail | MethodCallTail ;) )
+  |  (int (e | []) | boolean | void) id AssignmentTail
+  |  this (DotNotation)* (AssignmentTail | MethodCallTail)
+  |  if ( Expression ) Statement (else Statement | e)   
+  |  while ( Expression ) Statement 
+*/
+  Statement parseStatement() throws ParsingException {
+    SourcePosition stmtPosn = posn;
+    // Prefer to declare variables used in multiple cases here
+    String name;
+    Expression rhs; // for assignments
+    Type type;
+    VarDecl decl;
+    Reference ref;
+    ExprList args; // for method calls
+    Identifier id;
+    
+    switch (currentToken) {
+    
+    // Block
+    case BRACE_OPEN:
+      accept();
+      StatementList statements = new StatementList();
+      while(currentToken != BRACE_CLOSE)
+        statements.add(parseStatement());
+      accept();
+      return new BlockStmt(statements, stmtPosn);
+      
+    // Tricky one
+    case ID:
+      name = currentToken.spelling;
+      accept();
+      if (currentToken == BRACKET_OPEN) { // still can't tell, could be Class[] or Class[Expression]
+        accept();
+        if (currentToken == BRACKET_CLOSE) { // parsed a Class[] -> VarDeclStmt
+          id = new Identifier(name, posn);
+          type = new ArrayType(new ClassType(id, posn), posn);
+          accept();
+          name = currentToken.spelling;
+          accept(ID);
+          decl = new VarDecl(type, name, posn);
+          rhs = parseAssignmentTail();
+          return new VarDeclStmt(decl, rhs, stmtPosn);
+        }
+        else { // parsing Reference -> AssignStmt
+          id = new Identifier(name, posn);
+          ref = new IdRef(id, posn);
+          Expression index = parseExpression();
+          accept(BRACKET_CLOSE);
+          ref = new IndexedRef(ref, index, posn);
+          while (currentToken == PERIOD)
+            ref = parseDotNotation(ref);
+          if (currentToken == ASSIGNMENT) {
+              rhs = parseAssignmentTail();
+              return new AssignStmt(ref, rhs, stmtPosn);
+          }
+          else if (currentToken == PARENTHESIS_OPEN) {
+            args = parseMethodCallTail();
+            accept(SEMICOLON);
+            return new CallStmt(ref, args, stmtPosn);
+          }
+          else throw new SyntaxException(currentToken, stmtPosn);
+        }
+      }
+      
+      // The following are not id[] or id[Expression]
+      
+      else if (currentToken == ID) { // VarDeclStmt with a ClassType
+        id = new Identifier(name, posn);
+        type = new ClassType(id, posn);
+        name = currentToken.spelling; 
+        accept();
+        decl = new VarDecl(type, name, posn);
+        rhs = parseAssignmentTail();
+        return new VarDeclStmt(decl, rhs, stmtPosn);
+      }
+      else { // qualified reference
+        id = new Identifier(name, posn);
+        ref = new IdRef(id, posn);
+        while (currentToken == PERIOD)
+          ref = parseDotNotation(ref);
+        if (currentToken == ASSIGNMENT) {
+          rhs = parseAssignmentTail();
+          return new AssignStmt(ref, rhs, stmtPosn);
+        }
+        else if (currentToken == PARENTHESIS_OPEN) {
+          args = parseMethodCallTail();
+          accept(SEMICOLON);
+          return new CallStmt(ref, args, stmtPosn);
+        }
+        else throw new SyntaxException(currentToken, stmtPosn);
+      }
+    
+    // Declarations
+    case INT:
+      type = new BaseType(TypeKind.INT, posn);
+      accept();
+      // Could be array
+      if (currentToken == BRACKET_OPEN) {
+        accept();
+        accept(BRACKET_CLOSE);
+        type = new ArrayType(type, posn);
+      }
+      name = currentToken.spelling;
+      accept(ID);
+      decl = new VarDecl(type, name, posn);
+      rhs = parseAssignmentTail();
+      return new VarDeclStmt(decl, rhs, stmtPosn);
+
+    case BOOLEAN:
+      type = new BaseType(TypeKind.BOOLEAN, posn);
+      accept();
+      name = currentToken.spelling;
+      accept(ID);
+      decl = new VarDecl(type, name, posn);
+      rhs = parseAssignmentTail();
+      return new VarDeclStmt(decl, rhs, stmtPosn);
+    
+    // Syntactically valid, but will get sorted out in contextual analysis
+    case VOID:
+      type = new BaseType(TypeKind.VOID, posn);
+      accept();
+      name = currentToken.spelling;
+      accept(ID);
+      decl = new VarDecl(type, name, posn);
+      rhs = parseAssignmentTail();
+      return new VarDeclStmt(decl, rhs, stmtPosn);
+      
+    // THIS Reference -- Method Call or Assignment
+    case THIS:
+      ref = new ThisRef(posn);
+      accept();
+      while (currentToken == PERIOD)
+        ref = parseDotNotation(ref);
+      if (currentToken == ASSIGNMENT) {
+        rhs = parseAssignmentTail();
+        return new AssignStmt(ref, rhs, stmtPosn);
+      }
+      else if (currentToken == PARENTHESIS_OPEN) {
+        args = parseMethodCallTail();
+        accept(SEMICOLON);
+        return new CallStmt(ref, args, stmtPosn);
+      }
+      else throw new SyntaxException(currentToken, stmtPosn);
+
+    // Conditional Branch
+    case IF:
+      accept();
+      accept(PARENTHESIS_OPEN);
+      Expression ifCondition = parseExpression();
+      accept(PARENTHESIS_CLOSE);
+      Statement ifBody = parseStatement();
+      IfStmt toReturn = new IfStmt(ifCondition, ifBody, stmtPosn);
+      // 'else' statement (includes else-if because Statement ::= if ... )
+      if (currentToken == ELSE) {
+        accept();
+        Statement elseBody = parseStatement();
+        toReturn = new IfStmt(ifCondition, ifBody, elseBody, stmtPosn);
+      }
+      return toReturn;
+      
+    // While Loop
+    case WHILE:
+      accept();
+      accept(PARENTHESIS_OPEN);
+      Expression whileCondition = parseExpression();
+      accept(PARENTHESIS_CLOSE);
+      Statement whileBody = parseStatement();
+      return new WhileStmt(whileCondition, whileBody, stmtPosn);
+      
+    // For Loop
+    case FOR:
+      accept();
+      accept(PARENTHESIS_OPEN);
+      Statement init = parseStatement();
+      if (!(init instanceof VarDeclStmt || init instanceof AssignStmt 
+          || init instanceof CallStmt || init instanceof EmptyStmt))
+        throw new SyntaxException(SEMICOLON, init.posn);
+      Expression cond = parseExpression();
+      accept(SEMICOLON);
+      
+      // "update" stmt can be blank
+      Statement update;
+      if (currentToken == PARENTHESIS_CLOSE) {
+        accept();
+        update = new EmptyStmt(stmtPosn);
+      }
+      else {
+        // need special parsing method to leave off semicolon
+        update = parseSimpleStatement();
+        accept(PARENTHESIS_CLOSE);
+      }
+      Statement body = parseStatement();
+      return new ForStmt(init, cond, update, body, stmtPosn);
+      
+    // Empty statement
+    case SEMICOLON:
+      accept();
+      return new EmptyStmt(stmtPosn);
+    default:
+      throw new SyntaxException(currentToken, stmtPosn);
+    }
+  }
+  
+  // SimpleStatement ::= AssignStmt | CallStmt (no semicolon!)
+  Statement parseSimpleStatement() throws ParsingException {
+    SourcePosition stmtPosn = posn;
+    // Prefer to declare variables used in multiple cases here
+    String name;
+    Expression rhs; // for assignments
+    Reference ref;
+    ExprList args; // for method calls
+    Identifier id;
+    
+    switch (currentToken) { 
+    // Tricky one
+    case ID:
+      name = currentToken.spelling;
+      accept();
+      if (currentToken == BRACKET_OPEN) {
+        accept(); // disallow var decls
+        // parsing Reference -> AssignStmt
+        id = new Identifier(name, posn);
+        ref = new IdRef(id, posn);
+        Expression index = parseExpression();
+        accept(BRACKET_CLOSE);
+        ref = new IndexedRef(ref, index, posn);
+        
+        while (currentToken == PERIOD)
+          ref = parseDotNotation(ref);
+        
+        if (currentToken == ASSIGNMENT) {
+          rhs = parseAssignmentTailNoSemicolon();
+          return new AssignStmt(ref, rhs, stmtPosn);
+        }
+        else if (currentToken == PARENTHESIS_OPEN) {
+          args = parseMethodCallTail();
+          return new CallStmt(ref, args, stmtPosn);
+        }
+        else throw new SyntaxException(currentToken, stmtPosn);
+      }
+      
+      else { // qualified reference
+        id = new Identifier(name, posn);
+        ref = new IdRef(id, posn);
+        while (currentToken == PERIOD)
+          ref = parseDotNotation(ref);
+        if (currentToken == ASSIGNMENT) {
+          rhs = parseAssignmentTailNoSemicolon();
+          return new AssignStmt(ref, rhs, stmtPosn);
+        }
+        else if (currentToken == PARENTHESIS_OPEN) {
+          args = parseMethodCallTail();
+          return new CallStmt(ref, args, stmtPosn);
+        }
+        else throw new SyntaxException(currentToken, posn);
+      }
+    
+    // Disallow var decls
+      
+    // THIS Reference -- Method Call or Assignment
+    case THIS:
+      ref = new ThisRef(posn);
+      accept();
+      while (currentToken == PERIOD)
+        ref = parseDotNotation(ref);
+      if (currentToken == ASSIGNMENT) {
+        rhs = parseAssignmentTailNoSemicolon();
+        return new AssignStmt(ref, rhs, stmtPosn);
+      }
+      else if (currentToken == PARENTHESIS_OPEN) {
+        args = parseMethodCallTail();
+        accept(SEMICOLON);
+        return new CallStmt(ref, args, stmtPosn);
+      }
+      else throw new SyntaxException(currentToken, stmtPosn);
+      
+    default:
+      throw new SyntaxException(currentToken, stmtPosn);
+    }
+  }
+  
+  Expression parseAssignmentTailNoSemicolon() throws ParsingException {
+    accept(ASSIGNMENT);
+    Expression e = parseExpression();
+    return e;
+  }
+  
+  // DotNotation ::= . id  (e | [ Expression ])
+  Reference parseDotNotation(Reference ref) throws ParsingException {
+    accept(PERIOD);
+    Identifier id = new Identifier(currentToken.spelling, posn);
+    accept(ID);
+    ref = new QualifiedRef(ref, id, posn);
+    // if there is an index, make it an IndexedRef using the QualifiedRef
+    if (currentToken == BRACKET_OPEN) {
+      accept();
+      Expression e = parseExpression();
+      accept(BRACKET_CLOSE);
+      ref = new IndexedRef(ref, e, posn);
+    }
+    return ref;
+  }
+
+  // AssignmentTail ::=  =  Expression ;
+  Expression parseAssignmentTail() throws ParsingException {
+    accept(ASSIGNMENT);
+    Expression e = parseExpression();
+    accept(SEMICOLON);
+    return e;
+  }
+
+  ExprList parseMethodCallTail() throws ParsingException {
+    ExprList args = new ExprList();
+    accept();
+    if (currentToken != PARENTHESIS_CLOSE)
+      args = parseArgumentList();
+    accept(PARENTHESIS_CLOSE);
+    return args;
+  }
+
+  // Expression  ::=  Instantiation | 'null' | Predicate1 (|| Predicate1)*
+  Expression parseExpression() throws ParsingException {
+    switch (currentToken) {
+    case NEW:
+      return parseInstantiation();
+    case NULL:
+      accept();
+      return new LiteralExpr(new NullLiteral(posn), posn);
+
+    default:
+      Expression e1 = parsePredicate1();
+      while (currentToken == OR) {
+        Operator binop = new Operator(currentToken, posn);
+        accept();
+        Expression e2 = parsePredicate1();
+        e1 = new BinaryExpr(binop, e1, e2, posn);
+      }
+      return e1;
+    }
+  }
+  
+  // Instantiation ::= new  ( id ( ( ) | [ Expression ]) | int [ Expression ])  ) 
+  NewExpr parseInstantiation() throws ParsingException {
+    accept();
+    if (currentToken == ID) {
+      Identifier id = new Identifier(currentToken.spelling, posn);
+      ClassType className = new ClassType(id, posn);
+      accept();
+      // decide object or array
+      if (currentToken == PARENTHESIS_OPEN) {
+        // Only default constructors in miniJava
+        accept();
+        accept(PARENTHESIS_CLOSE);
+        return new NewObjectExpr(className, posn);
+      }
+      else if (currentToken == BRACKET_OPEN) {
+        accept();
+        Expression size = parseExpression();
+        accept(BRACKET_CLOSE);
+        return new NewArrayExpr(className, size, posn);
+      }
+      else throw new SyntaxException(currentToken, posn);
+    }
+    // new array
+    else if (currentToken == INT) { // array
+      Type intType = new BaseType(TypeKind.INT, posn);
+      accept();
+      accept(BRACKET_OPEN);
+      Expression size = parseExpression();
+      accept(BRACKET_CLOSE);
+      return new NewArrayExpr(intType, size, posn);
+    }
+    else throw new SyntaxException(currentToken, posn);
+  }
+  
+  // Predicate1 ::= Predicate2 (&& Predicate2)*
+  Expression parsePredicate1() throws ParsingException {
+    Expression e1 = parsePredicate2();
+    while (currentToken == AND) {
+      Operator binop = new Operator(currentToken, posn);
+      accept();
+      Expression e2 = parsePredicate2();
+      e1 = new BinaryExpr(binop, e1, e2, posn);
+    }
+    return e1;
+  }
+  
+  // Predicate2 ::= Predicate3 (Equality Predicate3)*
+  Expression parsePredicate2() throws ParsingException {
+    Expression e1 = parsePredicate3();
+    while (isEquality(currentToken)) {
+      Operator binop = new Operator(currentToken, posn);
+      accept();
+      Expression e2 = parsePredicate3();
+      e1 = new BinaryExpr(binop, e1, e2, posn);
+    }
+    return e1;
+  }
+  
+  // Predicate3 ::= Predicate4 (Relational Predicate4)*
+  Expression parsePredicate3() throws ParsingException {
+    Expression e1 = parsePredicate4();
+    while (isRelational(currentToken)) {
+      Operator binop = new Operator(currentToken, posn);
+      accept();
+      Expression e2 = parsePredicate4();
+      e1 = new BinaryExpr(binop, e1, e2, posn);
+    }
+    return e1;
+  }
+  
+  // Predicate4 ::= Term (Adder Term)*
+  Expression parsePredicate4() throws ParsingException {
+    Expression e1 = parseTerm();
+    while (currentToken == PLUS || currentToken == MINUS) {
+      Operator binop = new Operator(currentToken, posn);
+      accept();
+      Expression e2 = parseTerm();
+      e1 = new BinaryExpr(binop, e1, e2, posn);
+    }
+    return e1;  
+  }
+  
+  // Term ::= Factor (Multiplier Factor)*
+  Expression parseTerm() throws ParsingException {
+    Expression e1 = parseFactor();
+    while (currentToken == MULTIPLY || currentToken == DIVIDE) {
+      Operator binop = new Operator(currentToken, posn);
+      accept();
+      Expression e2 = parseFactor();
+      e1 = new BinaryExpr(binop, e1, e2, posn);
+    }
+    return e1;
+  }
+  
+  /* Factor ::= (Reference   (e | ( MethodCallTail )  )
+      |  Unop Factor  | ( Expression )  
+      |  intLit | true | false 
+   */
+  Expression parseFactor() throws ParsingException {
+    switch (currentToken) {
+    
+    // Reference or Method call
+    case THIS: case ID:
+      Reference ref = parseReference();
+      if (currentToken == PARENTHESIS_OPEN) {
+        ExprList args = parseMethodCallTail();
+        return new CallExpr(ref, args, posn);
+      }
+      else return new RefExpr(ref, posn);
+      
+    // Unop
+    case NOT: case MINUS:
+      Operator unop = new Operator(currentToken, posn);
+      accept();
+      Expression operand = parseFactor();
+      return new UnaryExpr(unop, operand, posn);
+      
+    // Matching parentheses rule
+    case PARENTHESIS_OPEN:
+      accept();
+      Expression e = parseExpression();
+      accept(PARENTHESIS_CLOSE);
+      return e;
+      
+    case INTEGER_LITERAL: 
+      Literal intLit = new IntLiteral(currentToken.spelling, posn);
+      accept();
+      return new LiteralExpr(intLit, posn);
+      
+    case TRUE: case FALSE:
+      Literal bool = new BooleanLiteral(currentToken.spelling, posn);
+      accept();
+      return new LiteralExpr(bool, posn);
+      
+    default:
+      throw new SyntaxException(currentToken, posn);
+    }
+  }
+
+  
+
+  /* Helper Methods */
+
+  /* Verifies that the current token in the stream is valid in the syntax
+   * Gets next token from stream to preserve the invariant mentioned above
+   * for parsing methods.
+   */
+  private void accept(Token expected) throws ParsingException {
+    if (currentToken == expected)
+      accept(); // may throw token exception
+    else throw new SyntaxException(currentToken, posn);
+  }
+
+  /* Used when the program has already checked the token and wants to proceed.
+   * Convenient for handling multiple cases at once in a switch-case statement.
+   * Will never throw a SyntaxException, but throws ParsingException to keep things kosher.
+   */
+  private void accept() throws ParsingException {
+    currentToken = scanner.nextToken();
+    posn = currentToken.getSourcePosition();
+  }
+  
+  boolean isBinop(Token token){
+    switch (token) {
+    case AND: case OR: case PLUS: case MINUS: case MULTIPLY: case DIVIDE:
+    case NOT_EQUAL_TO: case GREATER_THAN_OR_EQUAL_TO: case GREATER_THAN:
+    case EQUAL_TO: case LESS_THAN: case LESS_THAN_OR_EQUAL_TO:
+      return true;
+    default:
+      return false;
+    }
+  }
+  
+  boolean isRelational(Token token) {
+    switch (token) {
+    case GREATER_THAN_OR_EQUAL_TO: case GREATER_THAN:
+    case LESS_THAN: case LESS_THAN_OR_EQUAL_TO:
+      return true;
+    default:
+      return false;
+    }
+  }
+  
+  boolean isEquality(Token token) {
+    switch (token) {
+    case EQUAL_TO: case NOT_EQUAL_TO: 
+      return true;
+    default:
+      return false;
+    }
+  }
+}
+
+            </code>
+          </pre>
+        </div>
+        <hr>
+          <span class="credits right">Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></span>
+      </section>
+
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+    
+  </body>
+</html>

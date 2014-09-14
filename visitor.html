@@ -1,0 +1,752 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Brian's Portfolio</title>
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/prism.css"
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="javascripts/prism.js"></script>
+    <script src="javascripts/respond.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <!--[if lt IE 8]>
+    <link rel="stylesheet" href="stylesheets/ie.css">
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+  </head>
+  <body>
+      <div id="header">
+        <nav><ul>
+          <li><a href="/index.html">Home</a></li>
+          <li><a href="/medcosts.html">MedCosts</a></li>
+          <li><a href="/compiler.html">miniJava Compiler</a></li>
+          <li><a href="/mips.html">MIPS CPU</a></li>
+        </ul></nav>
+      </div><!-- end header -->
+
+    <div class="wrapper">
+
+      <section>
+        <div id="title">
+          <h1>miniJava Compiler</h1>
+          <p><a href="http://www.cambridge.org/us/features/052182060X/">miniJava</a> is a subset of Java simplified for instruction in compiler design. &nbsp;It is simple enough for a student to write a fully functional compiler over the course of a semester, but retains most of Java's procedural syntax and its basic object-oriented functionality. &nbsp;My implementation went beyond the basic miniJava specification, implementing all of Java's scoping rules, 'for' loops, and access modifiers for fields and methods.</p>
+          <p>The miniJava compiler was written in full Java.</p>
+          <hr>
+        </div>
+        <div>
+          <!-- Description -->
+          <h5>Samples:</h5>
+          <ol>
+            <li><a href="/compiler.java">Top Module</a></li>
+            <li><a href="/parser.html">Syntactic Analysis</a></li>
+            <li>Contextual Analysis</li>
+          </ol>
+          <pre>
+            <code class="language-java">
+package mjava.context;
+
+import mjava.CompilationException;
+import mjava.ast.*;
+import mjava.ast.Package;
+import mjava.syntax.SourcePosition;
+
+import java.util.Queue;
+import java.util.LinkedList;
+
+
+// Performs identification and type checking in one pass
+public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, Type> {
+  
+  Queue<Declaration> bfsQueue;
+  Queue<MethodWrapper> methodBodies;
+  // each class gets its own id table for members
+  // Map used to retrieve correct table when a member comes out of bfsQueue
+  TwoWayMap classToTableMap;
+  IdentificationTable classes; // needs to be globally visible
+  VarDecl sameLineDecl = null; // used to avoid int x = x; etc.
+  boolean qualified = false; // used to reference shadowed instance variables w/ qualified ref
+  
+  // Used for type checking
+  static SourcePosition nowhere = new SourcePosition(0, 0);
+  static Type boolType = new BaseType(TypeKind.BOOLEAN, nowhere);
+  static Type intType = new BaseType(TypeKind.INT, nowhere);
+  static Type voidType = new BaseType(TypeKind.VOID, nowhere);
+  
+  public void identifyAndTypeCheck(AST ast) throws CompilationException {
+    classes = new ListOfMaps();
+    ast.visit(this, classes);
+  }   
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // PACKAGE
+  //
+  /////////////////////////////////////////////////////////////////////////////// 
+
+  public Type visitPackage(Package prog, IdentificationTable idTable) throws CompilationException {
+    
+    classToTableMap = new TwoWayMap();
+    addPredefinedNames(prog);
+    
+    // Breadth-first search of class decls and their members
+    bfsQueue = new LinkedList<Declaration>();
+    methodBodies = new LinkedList<MethodWrapper>();
+    
+    // each class adds members to bfsQueue and memberTables
+    for (ClassDecl c: prog.classDeclList)
+      c.visit(this, idTable); 
+    
+    // BFS over class members
+    while (!bfsQueue.isEmpty()) {
+      Declaration decl = bfsQueue.poll();
+      idTable = classToTableMap.get(decl);
+      decl.visit(this, idTable);
+    }
+    
+    // methodBodies has been filled by the BFS
+    // Each method body is DFS'd
+    // A little improper because this should go in visitMethodDecl()
+    int numberMains = 0;
+    while (!methodBodies.isEmpty()) {
+      MethodWrapper method = methodBodies.poll();
+      idTable = classToTableMap.get(method.header);
+      
+      if (method.header.isStatic)
+        idTable.openStaticScope();
+      else
+        idTable.openScope();
+      
+      for (ParameterDecl p : method.parameters)
+        p.visit(this, idTable);
+      for (Statement s : method.statements)
+        s.visit(this, idTable);
+      if (method.returnExpression != null)
+        method.returnExpression.visit(this, idTable);
+      
+      if (method.header.isStatic)
+        idTable.closeStaticScope();
+      else
+        idTable.closeScope();
+      
+      // Type checking
+      Type expectedReturnType = method.header.type;
+      if (expectedReturnType.typeKind == TypeKind.VOID) {
+        if (method.returnExpression != null)
+          throw new TypeException(method.returnExpression.posn, "Void method cannot have a return statement");
+      }
+      else if (method.returnExpression == null)
+        throw new TypeException(method.header.posn, "Non-void method must have a return statement");
+      else {
+        Type actualReturnType = method.returnExpression.type;
+        if (!expectedReturnType.equals(actualReturnType))
+          throw new TypeException(method.returnExpression.posn, "Must return type " + expectedReturnType.typeKind);
+      }
+      
+      // Exactly one main method
+      if (isMain(method.header))
+        numberMains++;
+    }
+    
+    if (numberMains == 0) 
+      throw new TypeException(prog.posn, "No public main method found");
+    else if (numberMains > 1)
+      throw new TypeException(prog.posn, "Multiple main methods found");
+    
+    return null;
+  }
+
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // DECLARATIONS
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitClassDecl(ClassDecl clas, IdentificationTable idTable) throws CompilationException {
+    
+    if (classes.containsKey(clas.name))
+      throw new IdentificationException(clas.posn, "Cannot have duplicate class names");
+    idTable.put(clas.name, clas);
+    IdentificationTable classMembers = new ListOfMaps();
+    classToTableMap.put(clas, classMembers);
+    classToTableMap.put(classMembers, clas);
+    
+    for (FieldDecl f: clas.fieldDeclList) {
+      bfsQueue.add(f);
+      classToTableMap.put(f, classMembers);
+    }
+    for (MethodDecl m: clas.methodDeclList) {
+      bfsQueue.add(m);
+      classToTableMap.put(m, classMembers);
+    }
+    return null;
+  }
+
+  public Type visitFieldDecl(FieldDecl f, IdentificationTable idTable) throws CompilationException {
+    f.type.visit(this, idTable);
+    checkVoidType(f.type);
+    // Cannot hide other member names
+    if (idTable.get(f.name) instanceof FieldDecl || idTable.get(f.name) instanceof MethodDecl)
+      throw new IdentificationException(f.posn, "Cannot hide other member names in the same class");
+    idTable.put(f.name, f);
+    return null;
+  }
+
+  public Type visitMethodDecl(MethodDecl m, IdentificationTable idTable) throws CompilationException {
+
+    m.type.visit(this, idTable);
+    if (idTable.get(m.name) instanceof FieldDecl || idTable.get(m.name) instanceof MethodDecl)
+      throw new IdentificationException(m.posn, "Cannot hide other member names in the same class");
+    idTable.put(m.name, m);
+    
+    // end of BFS!! We have identified the method header
+    // Wrap the parameters and statements into a method body and put in queue
+    
+    ParameterDeclList pdl = m.parameterDeclList;
+    StatementList sl = m.statementList;
+    Expression returnExp = m.returnExp;
+    methodBodies.add(new MethodWrapper(m, pdl, sl, returnExp));
+    
+    return null;
+  }
+
+  public Type visitParameterDecl(ParameterDecl pd, IdentificationTable idTable) throws CompilationException {
+    pd.type.visit(this, idTable);
+    checkVoidType(pd.type);
+    // Check to make sure a parameter with the same name does not exist
+    if (idTable.get(pd.name) instanceof ParameterDecl)
+      throw new IdentificationException(pd.posn, "Duplicate parameter " + pd.name);
+    idTable.put(pd.name, pd);
+    return null;
+  } 
+
+  public Type visitVarDecl(VarDecl vd, IdentificationTable idTable) throws CompilationException {
+    vd.type.visit(this, idTable);
+    checkVoidType(vd.type);
+    if (idTable.get(vd.name) instanceof ParameterDecl)
+      throw new IdentificationException(vd.posn, "Cannot hide parameter name");
+    else if (idTable.get(vd.name) instanceof VarDecl)
+      throw new IdentificationException(vd.posn, "Cannot hide another local variable");
+    idTable.put(vd.name, vd);
+    return null;
+  }
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // TYPES
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitBaseType(BaseType type, IdentificationTable idTable) throws CompilationException {
+    return type;
+  }
+
+  public Type visitClassType(ClassType type, IdentificationTable idTable) throws CompilationException {
+    ClassDecl hereItIs = (ClassDecl) classes.get(type.className.spelling);
+    if (hereItIs == null)
+      throw new IdentificationException(type.posn, "Class name not recognized");
+    type.className.setDecl(hereItIs); 
+    return type;
+  }
+
+  public Type visitArrayType(ArrayType type, IdentificationTable idTable) throws CompilationException {
+    type.eltType.visit(this, idTable);
+    checkVoidType(type.eltType);
+    return type;
+  }
+  
+  public Type visitNullType(NullType type, IdentificationTable idTable) throws CompilationException {
+    return type;
+  }
+
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // STATEMENTS
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitBlockStmt(BlockStmt stmt, IdentificationTable idTable) throws CompilationException {
+    idTable.openScope();
+    StatementList sl = stmt.sl;
+    for (Statement s: sl) {
+      s.visit(this, idTable);
+    }
+    idTable.closeScope();
+    return null;
+  }
+
+  public Type visitVardeclStmt(VarDeclStmt stmt, IdentificationTable idTable) throws CompilationException {
+    stmt.varDecl.visit(this, idTable);
+    sameLineDecl = stmt.varDecl;
+    stmt.initExp.visit(this, idTable);
+    sameLineDecl = null;
+    
+    // Type checking
+    Type varType = stmt.varDecl.type;
+    Type exprType = stmt.initExp.type;
+    if (!varType.equals(exprType))
+      throw new TypeException(stmt.posn, "Variable type and expression type do not match");
+    return null;
+  }
+
+  public Type visitAssignStmt(AssignStmt stmt, IdentificationTable idTable) throws CompilationException {
+    stmt.ref.visit(this, idTable);
+    stmt.val.visit(this, idTable);
+    
+    checkStatic(stmt.ref, idTable);
+    
+    // The only final field in miniJava
+    if (stmt.ref instanceof QualifiedRef && ((QualifiedRef) stmt.ref).isRefToArrLength)
+      throw new IdentificationException(stmt.ref.posn, "Cannot assign to final field 'length'");
+    
+    Type varType = stmt.ref.type;
+    Type exprType = stmt.val.type;
+    if (stmt.ref.getDecl() instanceof MethodDecl)
+      throw new TypeException(stmt.posn, "Cannot assign to a method name");
+    if (!varType.equals(exprType))
+      throw new TypeException(stmt.posn, "Variable type and expression type do not match");
+    return null;
+  }
+
+  public Type visitCallStmt(CallStmt stmt, IdentificationTable idTable) throws CompilationException {
+    stmt.methodRef.visit(this, idTable);
+    // Check that we actually visited a method
+    if (!(stmt.methodRef.getDecl() instanceof MethodDecl))
+      throw new IdentificationException(stmt.methodRef.posn, "ID is not a method name");
+    
+    checkStatic(stmt.methodRef, idTable);
+    
+    ExprList al = stmt.argList;
+    for (Expression e: al)
+      e.visit(this, idTable);
+    
+    typeCheckMethodCall((MethodDecl) stmt.methodRef.getDecl(), stmt);
+    return null;
+  }
+
+  public Type visitIfStmt(IfStmt stmt, IdentificationTable idTable) throws CompilationException {
+    stmt.cond.visit(this, idTable);
+    if (stmt.cond.type.typeKind != TypeKind.BOOLEAN)
+      throw new TypeException(stmt.cond.posn, "Conditional expression must evaluate to a boolean value");
+    checkForSoleVarDeclStmt(stmt.thenStmt);
+    stmt.thenStmt.visit(this, idTable);
+    
+    if (stmt.elseStmt != null) {
+      checkForSoleVarDeclStmt(stmt.elseStmt);
+      stmt.elseStmt.visit(this, idTable);
+    }
+    return null;
+  }
+
+  public Type visitWhileStmt(WhileStmt stmt, IdentificationTable idTable) throws CompilationException {
+    stmt.cond.visit(this, idTable);
+    checkForSoleVarDeclStmt(stmt.body);
+    stmt.body.visit(this, idTable);
+    return null;
+  }
+  
+  public Type visitForStmt(ForStmt stmt, IdentificationTable idTable) throws CompilationException {
+    idTable.openScope(); // for possible declaration of iterator
+        stmt.init.visit(this, idTable);
+        stmt.cond.visit(this, idTable);
+        if (stmt.cond.type.typeKind != TypeKind.BOOLEAN)
+          throw new TypeException(stmt.cond.posn, "Conditional expression must evaluate to a boolean value");
+        stmt.action.visit(this, idTable);
+        stmt.body.visit(this, idTable); // body might get its own scope as well
+        idTable.closeScope();
+        return null;
+    }
+  
+  public Type visitEmptyStmt(EmptyStmt stmt, IdentificationTable idTable) throws CompilationException {
+        return null;
+    }
+
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // EXPRESSIONS
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitUnaryExpr(UnaryExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.operator.visit(this, idTable);
+    expr.expr.visit(this, idTable);
+    
+    expr.type = typeCheckUnaryOperator(expr);
+    return expr.type;
+  }
+
+  public Type visitBinaryExpr(BinaryExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.operator.visit(this, idTable);
+    expr.left.visit(this, idTable);
+    expr.right.visit(this, idTable);
+    
+    expr.type = typeCheckBinaryOperator(expr);
+    return expr.type;
+  }
+
+  public Type visitRefExpr(RefExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.type = expr.ref.visit(this, idTable);
+    // Check that our ID is actually for a variable
+    Declaration shouldBeVar = expr.ref.getDecl();
+    if (shouldBeVar instanceof MethodDecl 
+        || isClassName(expr.ref))
+      throw new IdentificationException(expr.ref.posn, "ID is not a variable name");
+    
+    checkStatic(expr.ref, idTable);
+    
+    return expr.type;
+  }
+
+  public Type visitCallExpr(CallExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.functionRef.visit(this, idTable);
+    // Check that our ID is actually for a method
+    if (!(expr.functionRef.getDecl() instanceof MethodDecl))
+      throw new IdentificationException(expr.functionRef.posn, "ID is not a method name");
+    ExprList al = expr.argList;
+    for (Expression e: al)
+      e.visit(this, idTable);
+    
+    checkStatic(expr.functionRef, idTable);
+    
+    expr.type = typeCheckMethodCall((MethodDecl) expr.functionRef.getDecl(), expr);
+    return expr.type;
+  }
+
+  public Type visitLiteralExpr(LiteralExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.type = expr.literal.visit(this, idTable);
+    return expr.type;
+  }
+
+  public Type visitNewArrayExpr(NewArrayExpr expr, IdentificationTable idTable) throws CompilationException {
+    Type eltType = expr.eltType.visit(this, idTable);
+    expr.sizeExpr.visit(this, idTable);
+    
+    // Type checking
+    expr.type = new ArrayType(eltType, expr.posn);
+    return expr.type;
+  }
+
+  public Type visitNewObjectExpr(NewObjectExpr expr, IdentificationTable idTable) throws CompilationException {
+    expr.type = expr.classType.visit(this, idTable);
+    return expr.type;
+  }
+
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // REFERENCES
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitQualifiedRef(QualifiedRef qr, IdentificationTable idTable) throws CompilationException {
+    // Has form qr == ref.id
+    qr.ref.visit(this, idTable);
+    Declaration qualifierDecl = qr.ref.getDecl();
+    if (qualifierDecl == null) // qualifier is indexed ref to a primitive type
+      throw new IdentificationException(qr.ref.posn, "Qualified references may only be made from a class type");
+    Type declType = qualifierDecl.type;
+    
+    // Length attribute of arrays
+    if (declType instanceof ArrayType && qr.id.spelling.equals("length")) {
+      qr.isRefToArrLength = true;
+      qr.type = intType;
+      return qr.type;
+    }
+    
+    if (!(qualifierDecl instanceof ClassDecl || declType instanceof ClassType)) {
+      // visit again and look for class name
+      qr.ref.visit(this, classes);
+      qualifierDecl = qr.ref.getDecl();
+      if (!(qualifierDecl instanceof ClassDecl))
+        throw new IdentificationException(qr.ref.posn, "Qualified references may only be made from a class type");
+    }
+    if (qualifierDecl instanceof MethodDecl)
+      throw new IdentificationException(qr.ref.posn, "Qualified references cannot be made from a method");
+    
+    // Find id in qr.ref's id table (possibly a different class)
+    ClassDecl qualifiedRefClassDecl;
+    if (qualifierDecl instanceof ClassDecl)
+      qualifiedRefClassDecl = (ClassDecl) qualifierDecl;
+    else
+      qualifiedRefClassDecl = (ClassDecl) ((ClassType) declType).className.getDecl();
+    
+    IdentificationTable otherTable = classToTableMap.get(qualifiedRefClassDecl);
+    qualified = true;
+    qr.type = qr.id.visit(this, otherTable); // find id in referenced class
+    qualified = false;
+     
+    
+    MemberDecl decl = (MemberDecl) qr.id.getDecl(); 
+    qr.setDecl(decl);
+
+    // Check visibility
+    Declaration thisClassDecl = classToTableMap.get(idTable);
+    if (decl.isPrivate && qualifiedRefClassDecl != thisClassDecl)
+      throw new IdentificationException(qr.id.posn, "Member is not visible from this class");
+    
+    // Check static access 
+    // -- for ref A.x, require x to be static if A is a class name
+    if (isClassName(qr.ref) && !((MemberDecl)qr.id.getDecl()).isStatic)
+      throw new IdentificationException(qr.id.posn, "Static reference to non-static variable " + qr.id.spelling);
+    
+    return qr.type;
+  }
+
+  public Type visitIndexedRef(IndexedRef ir, IdentificationTable idTable) throws CompilationException {
+    Type exprType = ir.indexExpr.visit(this, idTable);
+    if (!exprType.equals(intType))
+      throw new TypeException(ir.indexExpr.posn, "Indexing expression must evaluate to type INT");
+    
+    ArrayType arrType = (ArrayType) ir.ref.visit(this, idTable);
+
+    if (arrType.eltType instanceof ClassType) 
+      ir.setDecl(((ClassType)arrType.eltType).className.getDecl());
+    else ir.setDecl(null);
+    
+    // Type checking
+    ir.type = arrType.eltType;
+    return ir.type;
+  }
+
+  public Type visitIdRef(IdRef ref, IdentificationTable idTable) throws CompilationException {
+    ref.type = ref.id.visit(this, idTable);
+    ref.setDecl(ref.id.getDecl());
+
+    if (ref.getDecl() == sameLineDecl)
+      throw new IdentificationException(ref.posn, "Variable may not have been initialized");
+    return ref.type;
+  }
+
+  public Type visitThisRef(ThisRef ref, IdentificationTable idTable) throws CompilationException {
+    Declaration classDecl = classToTableMap.get(idTable);
+    ref.setDecl(classDecl);
+    return new ClassType(new Identifier(classDecl.name, classDecl.posn), classDecl.posn);
+  }
+
+
+  ///////////////////////////////////////////////////////////////////////////////
+  //
+  // TERMINALS
+  //
+  ///////////////////////////////////////////////////////////////////////////////
+
+  public Type visitIdentifier(Identifier id, IdentificationTable idTable) throws CompilationException {
+    Declaration decl;
+    if (qualified) {
+      decl = idTable.getMember(id.spelling);
+      if (decl == null)
+        throw new IdentificationException(id.posn, "ID not recognized");
+    }
+    else {  
+      decl = idTable.get(id.spelling);
+      if (decl == null) {
+        // Check for class name
+        decl = classes.get(id.spelling);
+        if (decl == null)
+          throw new IdentificationException(id.posn, "ID not recognized");
+      }
+    }
+    id.setDecl(decl);
+    id.type = decl.type;
+    return id.type;
+  }
+
+  public Type visitOperator(Operator op, IdentificationTable idTable) throws CompilationException {
+    return null;
+  }
+
+  public Type visitIntLiteral(IntLiteral num, IdentificationTable idTable) throws CompilationException {
+    num.type = intType;
+    return intType;
+  }
+
+  public Type visitBooleanLiteral(BooleanLiteral bool, IdentificationTable idTable) throws CompilationException {
+    bool.type = boolType;
+    return boolType;
+  }
+  
+  public Type visitNullLiteral(NullLiteral nil, IdentificationTable idTable) throws CompilationException {
+    nil.type = new NullType(nil.posn);
+    return nil.type;
+  }
+  
+  /* Helper Methods */
+  
+  // adds predefined names to AST
+  private void addPredefinedNames(Package prog) {   
+    // String
+    ClassDecl string = new ClassDecl("String", new FieldDeclList(), new MethodDeclList(), nowhere);
+    
+    // _PrintStream
+    MemberDecl field = new FieldDecl(false, false, voidType, "println", nowhere);
+    ParameterDeclList printParams = new ParameterDeclList();
+    printParams.add(new ParameterDecl(intType, "n", nowhere));
+    MethodDecl println = new MethodDecl(field, printParams, new StatementList(), null, nowhere);
+    MethodDeclList streamMethods = new MethodDeclList();
+    streamMethods.add(println);
+    ClassDecl stream = new ClassDecl("_PrintStream", new FieldDeclList(), streamMethods, nowhere);
+    
+    // System
+    Identifier printId = new Identifier("_PrintStream", nowhere);
+    printId.setDecl(stream);
+    Type streamType = new ClassType(printId, nowhere);
+    FieldDecl out = new FieldDecl(false, true, streamType, "out", nowhere);
+    FieldDeclList systemFields = new FieldDeclList();
+    systemFields.add(out);
+    ClassDecl system = new ClassDecl("System", systemFields, new MethodDeclList(), nowhere);
+    
+    // Add all classes to package
+    prog.classDeclList.add(string);
+    prog.classDeclList.add(stream);
+    prog.classDeclList.add(system);
+  }
+  
+  private void checkForSoleVarDeclStmt(Statement stmt) throws IdentificationException {
+    if (stmt instanceof VarDeclStmt) {
+      String errorMsg = "Variable declaration cannot be sole statement in a conditional branch";
+      SourcePosition posn;
+      posn = stmt.posn;
+      throw new IdentificationException(posn, errorMsg);
+    }
+  }
+  
+  private boolean isClassName(Reference ref) {
+    return (ref.getDecl() instanceof ClassDecl 
+        && !(ref instanceof IndexedRef || ref instanceof ThisRef));
+  }
+  
+  // Precondition: arg expressions have already been visited (id'd and typed)
+  private Type typeCheckMethodCall(MethodDecl decl, CallExpr call) throws TypeException {
+    // Make sure lists are the same size
+    ParameterDeclList params = decl.parameterDeclList;
+    ExprList args = call.argList;
+    if (args.size() != params.size())
+      throw new TypeException(call.posn, "Argument types do not match declared parameter types");
+
+    // Compare types of corresponding args and parameters
+    for (int i = 0; i < args.size(); i++) {
+      Type paramType = params.get(i).type;
+      Type argType = args.get(i).type;
+      if (!argType.equals(paramType))
+        throw new TypeException(call.posn, "Argument types do not match declared parameter types");
+    }
+    
+    return decl.type;
+  }
+  
+  private Type typeCheckMethodCall(MethodDecl decl, CallStmt call) throws TypeException {
+    
+    // Make sure lists are the same size
+    ParameterDeclList params = decl.parameterDeclList;
+    ExprList args = call.argList;
+    if (args.size() != params.size())
+      throw new TypeException(call.posn, "Argument types do not match declared parameter types");
+
+    // Compare types of corresponding args and parameters
+    for (int i = 0; i < args.size(); i++) {
+      Type paramType = params.get(i).type;
+      Type argType = args.get(i).type;
+      if (!argType.equals(paramType))
+        throw new TypeException(call.posn, "Argument types do not match declared parameter types");
+    }
+    
+    return null;
+  }
+  
+  private Type typeCheckUnaryOperator(UnaryExpr expr) throws TypeException {
+    switch (expr.operator.token) {
+    case NOT:
+      if (!(expr.expr.type.equals(boolType)))
+        throw new TypeException(expr.posn, "Unary operator NOT expects arguments of type BOOLEAN");
+      return boolType;
+    case MINUS:
+      if (!(expr.expr.type.equals(intType)))
+        throw new TypeException(expr.posn, "Unary operator NEG expects arguments of type INT");
+      return intType;
+    default: 
+      return null; // won't happen
+    }
+    
+  }
+  
+  private Type typeCheckBinaryOperator(BinaryExpr expr) throws TypeException {
+    Type leftType = expr.left.type;
+    Type rightType = expr.right.type;
+    switch (expr.operator.token) {
+
+    case PLUS: case MINUS: case MULTIPLY: case DIVIDE: 
+      if (!(leftType.equals(intType) && rightType.equals(intType)))
+        throw new TypeException(expr.posn, "Type mismatch with binary operator " + expr.operator.token);
+      return intType;
+
+    case AND: case OR:
+      if (!(leftType.equals(boolType) && rightType.equals(boolType)))
+        throw new TypeException(expr.posn, "Type mismatch with binary operator " + expr.operator.token);
+      return boolType;
+
+    case LESS_THAN: case LESS_THAN_OR_EQUAL_TO: case GREATER_THAN_OR_EQUAL_TO:
+    case GREATER_THAN:
+      if (!(leftType.equals(intType) && rightType.equals(intType)))
+        throw new TypeException(expr.posn, "Type mismatch with binary operator " + expr.operator.token);
+      return boolType;
+
+    case EQUAL_TO: case NOT_EQUAL_TO:
+      if (!(leftType.equals(rightType)))
+        throw new TypeException(expr.posn, "Type mismatch with binary operator " + expr.operator.token);
+      return boolType;
+    default:
+      return null; // won't happen
+    }
+  }
+  
+  // Also used by Encoder
+  public static boolean isMain(MethodDecl method) {
+    // Set up
+    ParameterDeclList params = method.parameterDeclList;
+    SourcePosition nowhere = new SourcePosition(0,0);
+    TypeKind returnType = method.type.typeKind;
+    Type strType = new ClassType(new Identifier("String", nowhere), nowhere);
+    Type stringArr = new ArrayType(strType, new SourcePosition(0,0));
+    
+    return method.name.equals("main") 
+        && !method.isPrivate && method.isStatic
+        && (returnType == TypeKind.VOID)
+        && (params.size() == 1) && params.get(0).type.equals(stringArr);
+  }
+  
+  // For variable declarations
+  private void checkVoidType(Type t) throws TypeException {
+    if (t.typeKind == TypeKind.VOID)
+      throw new TypeException(t.posn, "Variable cannot have void type");
+  }
+  
+  // For references (unfortunately, no visitReference() method)
+  // Disallow implicit & explicit ThisRef in static contexts
+  private void checkStatic(Reference ref, IdentificationTable idTable) throws IdentificationException {
+    // Only call after visiting ref so 
+    // ref instanceof ThisRef -> ref instanceof MemberDecl
+    if (idTable.isStaticScope()) 
+      if ((ref instanceof ThisRef || (ref instanceof IdRef && ref.getDecl() instanceof MemberDecl))
+          && !((MemberDecl) ref.getDecl()).isStatic)
+        throw new IdentificationException(ref.posn, "Cannot make non-static reference in static context"); 
+  }
+}
+
+            </code>
+          </pre>
+        </div>
+        <hr>
+          <span class="credits right">Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></span>
+      </section>
+
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+    
+  </body>
+</html>
