@@ -37,6 +37,87 @@
           <p>The circuits for the MIPS CPU were specified using the Verilog hardware description language, and the processor itself was implemented on an FPGA chip using this description.</p>
           <hr>
         </div>
+        <div>
+          <!-- Description -->
+          <pre>
+            <code class="language-clike">
+`timescale 1ns / 1ps
+
+module datapath #(
+  parameter Abits = 5, // 32 registers
+  parameter Dbits = 32
+  )(
+  input clock,
+  input reset, // reset pc?
+  input [31:0] instr,
+  input [Dbits-1:0] read_data, // from data memory
+  input [4:0] ALUfn,
+  input werf,
+  input reg_dst,
+  input alu_src,
+  input pc_src,
+  input jump,
+  input mem_to_reg,
+  input shift,
+  input jr,
+  input link,
+  
+  output reg [31:0] pc = 0,
+  output [Dbits-1:0] write_data, // to data memory
+  output [Dbits-1:0] ALUResult,
+  output FlagN,
+  output FlagC,
+  output FlagV,
+  output FlagZ
+    );
+
+  wire [Dbits-1:0] result;
+  wire [Dbits-1:0] din;
+  wire [Dbits-1:0] src_a;
+  wire [Dbits-1:0] src_b;
+  wire [Dbits-1:0] reg_read_data_1;
+  wire [Dbits-1:0] reg_read_data_2;
+  wire [4:0] reg_write_addr;
+  wire [Dbits-1:0] sign_imm;
+  wire [31:0] shamt;
+  wire [31:0] pc_branch;
+  wire [31:0] pc_plus_4;
+  wire [31:0] pc_next;
+  wire [31:0] pc_jump;
+  
+  alu #(Dbits) the_alu(src_a, src_b, ALUfn, 
+                  ALUResult, FlagN, FlagC, FlagV, FlagZ);
+  
+  regfile #(Abits, Dbits) the_reg(.clock(clock), .RegWrite(werf), .ReadAddr1(instr[25:21]), 
+                        .ReadAddr2(instr[20:16]), .WriteAddr(reg_write_addr), .din(din), 
+                        .ReadData1(reg_read_data_1), .ReadData2(reg_read_data_2));
+  
+  // datapath logic
+  assign reg_write_addr = link ? 5'd31 : (reg_dst ? instr[15:11] : instr[20:16]);
+  assign sign_imm = instr[15] ? {{16{1'b1}}, instr[15:0]} : {16'b0, instr[15:0]};
+  assign shamt = {27'b0, instr[10:6]};
+  assign write_data = reg_read_data_2;
+  assign src_a = shift ? shamt : reg_read_data_1;
+  assign src_b = alu_src ? sign_imm : reg_read_data_2;
+  assign result = mem_to_reg ? read_data : ALUResult;
+  assign din = link ? pc_plus_4 : result;
+  
+  // PC logic
+  assign pc_plus_4 = pc + 32'd4;
+  assign pc_branch = (sign_imm << 2) + pc_plus_4;
+  assign pc_jump = {pc_plus_4[31:28], instr[25:0] << 2};
+  assign pc_next = jr ? reg_read_data_1 : // jr
+              jump ? pc_jump : // j and jal
+              pc_src ? pc_branch : // beq and bne
+              pc_plus_4; // normal
+  
+  always @(posedge clock)
+    pc <= reset ? 0 : pc_next;
+
+endmodule
+            </code>
+          </pre>
+        </div>
           <span class="credits right">Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></span>
       </section>
 
