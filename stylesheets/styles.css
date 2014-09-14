@@ -617,6 +617,10 @@ section figure {
   padding-bottom: 40px;
 }
 
+section figure figcaption {
+  text-align: center;
+}
+
 section img {
   max-width: 100%;
   display: block;
