@@ -627,7 +627,7 @@ blockquote {
 div .code-box {
   width: 100%;
   height: 700px;
-  overflow: scroll;
+  /*overflow: scroll;*/
 }
 
 code {
