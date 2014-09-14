@@ -624,6 +624,12 @@ blockquote {
   font-style: italic;
 }
 
+div .code-box {
+  width: 200px;
+  height: 500px;
+  overflow: scroll;
+}
+
 code {
   font-family: "Lucida Sans", Monaco, Bitstream Vera Sans Mono, Lucida Console, Terminal;
   color: #efefef;
@@ -636,9 +642,6 @@ code {
   -ms-border-radius: 2px;
   -khtml-border-radius: 2px;
   border-radius: 2px;
-  width: 200px;
-  height: 500px;
-  overflow: scroll;
 }
 
 pre {
