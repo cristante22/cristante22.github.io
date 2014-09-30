@@ -58,7 +58,19 @@ import java.util.Queue;
 import java.util.LinkedList;
 
 
-// Performs identification and type checking in one pass
+/** Performs identification and type checking in one pass.  
+ *  Algorithm:
+ *    Traverses the Abstract Syntax Tree (AST) using the 'Visitor' design pattern.
+ *
+ *    Since the names of all classes and their public fields and methods 
+ *    need to be visible throughout, perform a hybrid graph search: 
+ *    BFS over the classes and their members, and then DFS the method bodies. 
+ *
+ *    Uses two special data structures:
+ *      TwoWayMap: for all key-value pairs (k,v) in the map, (v,k) is also a key-value pair.
+ *      IdentificationTable: tracks names and scope in the program.
+ *                           implemented as a list (for scope) of maps (for names). 
+ */
 public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, Type> {
   
   Queue<Declaration> bfsQueue;
@@ -66,9 +78,9 @@ public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, T
   // each class gets its own id table for members
   // Map used to retrieve correct table when a member comes out of bfsQueue
   TwoWayMap classToTableMap;
-  IdentificationTable classes; // needs to be globally visible
-  VarDecl sameLineDecl = null; // used to avoid int x = x; etc.
-  boolean qualified = false; // used to reference shadowed instance variables w/ qualified ref
+  IdentificationTable classes;  // needs to be globally visible
+  VarDecl sameLineDecl = null;  // used to avoid int x = x; etc.
+  boolean qualified = false;  // used to reference shadowed instance variables w/ qualified ref
   
   // Used for type checking
   static SourcePosition nowhere = new SourcePosition(0, 0);
@@ -76,6 +88,7 @@ public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, T
   static Type intType = new BaseType(TypeKind.INT, nowhere);
   static Type voidType = new BaseType(TypeKind.VOID, nowhere);
   
+  /** Initiates the tree traversal.  */
   public void identifyAndTypeCheck(AST ast) throws CompilationException {
     classes = new ListOfMaps();
     ast.visit(this, classes);
@@ -109,7 +122,6 @@ public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, T
     
     // methodBodies has been filled by the BFS
     // Each method body is DFS'd
-    // A little improper because this should go in visitMethodDecl()
     int numberMains = 0;
     while (!methodBodies.isEmpty()) {
       MethodWrapper method = methodBodies.poll();
@@ -737,6 +749,7 @@ public class ContextualAnalysisVisitor implements Visitor<IdentificationTable, T
         throw new IdentificationException(ref.posn, "Cannot make non-static reference in static context"); 
   }
 }
+
 
             </code>
           </pre>
